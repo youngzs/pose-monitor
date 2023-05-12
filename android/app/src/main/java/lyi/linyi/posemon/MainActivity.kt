@@ -24,10 +24,13 @@ import android.Manifest
 import android.app.AlertDialog
 import android.app.Dialog
 import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Process
-import android.view.SurfaceView
+import android.view.SurfaceHolder
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.view.View
 import android.view.WindowManager
 import android.widget.*
@@ -39,11 +42,13 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import lyi.linyi.posemon.camera.CameraSource
+import lyi.linyi.posemon.data.CameraData
 import lyi.linyi.posemon.data.Device
-import lyi.linyi.posemon.data.Camera
 import lyi.linyi.posemon.ml.ModelType
 import lyi.linyi.posemon.ml.MoveNet
 import lyi.linyi.posemon.ml.PoseClassifier
+import android.hardware.Camera
+import android.view.TextureView
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -51,12 +56,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 为视频画面创建一个 SurfaceView */
-    private lateinit var surfaceView: SurfaceView
+//    private lateinit var surfaceView: SurfaceView
+//    private lateinit var surfaceHolder: SurfaceHolder
+//    private var camera: Camera? = null
+    /** 为视频画面创建一个 TextureView */
+    private lateinit var textureView: TextureView
 
     /** 修改默认计算设备：CPU、GPU、NNAPI（AI加速器） */
-    private var device = Device.CPU
+    private var device = Device.NNAPI
     /** 修改默认摄像头：FRONT、BACK */
-    private var selectedCamera = Camera.BACK
+    private var selectedCamera = CameraData.BACK
 
     /** 定义几个计数器 */
     private var forwardheadCounter = 0
@@ -119,6 +128,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        textureView = findViewById(R.id.textureView)
+        textureView.surfaceTextureListener = surfaceTextureListener
+
         /** 程序运行时保持屏幕常亮 */
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         tvScore = findViewById(R.id.tvScore)
@@ -132,11 +144,21 @@ class MainActivity : AppCompatActivity() {
         tvFPS = findViewById(R.id.tvFps)
         spnDevice = findViewById(R.id.spnDevice)
         spnCamera = findViewById(R.id.spnCamera)
-        surfaceView = findViewById(R.id.surfaceView)
+
         initSpinner()
         if (!isCameraPermissionGranted()) {
             requestPermission()
         }
+    }
+
+    private val surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+        override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+            openCamera()
+        }
+
+        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
+        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
     }
 
     override fun onStart() {
@@ -164,140 +186,162 @@ class MainActivity : AppCompatActivity() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun openCamera() {
-        /** 音频播放 */
-        val crosslegPlayer = MediaPlayer.create(this, R.raw.crossleg)
-        val forwardheadPlayer = MediaPlayer.create(this, R.raw.forwardhead)
-        val standardPlayer = MediaPlayer.create(this, R.raw.standard)
-        var crosslegPlayerFlag = true
-        var forwardheadPlayerFlag = true
-        var standardPlayerFlag = true
-
-        if (isCameraPermissionGranted()) {
-            if (cameraSource == null) {
-                cameraSource =
-                    CameraSource(surfaceView, selectedCamera, object : CameraSource.CameraSourceListener {
-                        override fun onFPSListener(fps: Int) {
-
-                            /** 解释一下，tfe_pe_tv 的意思：tensorflow example、pose estimation、text view */
-                            tvFPS.text = getString(R.string.tfe_pe_tv_fps, fps)
-                        }
-
-                        /** 对检测结果进行处理 */
-                        override fun onDetectedInfo(
-                            personScore: Float?,
-                            poseLabels: List<Pair<String, Float>>?
-                        ) {
-                            tvScore.text = getString(R.string.tfe_pe_tv_score, personScore ?: 0f)
-
-                            /** 分析目标姿态，给出提示 */
-                            if (poseLabels != null && personScore != null && personScore > 0.3) {
-                                missingCounter = 0
-                                val sortedLabels = poseLabels.sortedByDescending { it.second }
-                                when (sortedLabels[0].first) {
-                                    "forwardhead" -> {
-                                        crosslegCounter = 0
-                                        standardCounter = 0
-                                        if (poseRegister == "forwardhead") {
-                                            forwardheadCounter++
-                                        }
-                                        poseRegister = "forwardhead"
-
-                                        /** 显示当前坐姿状态：脖子前伸 */
-                                        if (forwardheadCounter > 60) {
-
-                                            /** 播放提示音 */
-                                            if (forwardheadPlayerFlag) {
-                                                forwardheadPlayer.start()
-                                            }
-                                            standardPlayerFlag = true
-                                            crosslegPlayerFlag = true
-                                            forwardheadPlayerFlag = false
-
-                                            ivStatus.setImageResource(R.drawable.forwardhead_confirm)
-                                        } else if (forwardheadCounter > 30) {
-                                            ivStatus.setImageResource(R.drawable.forwardhead_suspect)
-                                        }
-
-                                        /** 显示 Debug 信息 */
-                                        tvDebug.text = getString(R.string.tfe_pe_tv_debug, "${sortedLabels[0].first} $forwardheadCounter")
-                                    }
-                                    "crossleg" -> {
-                                        forwardheadCounter = 0
-                                        standardCounter = 0
-                                        if (poseRegister == "crossleg") {
-                                            crosslegCounter++
-                                        }
-                                        poseRegister = "crossleg"
-
-                                        /** 显示当前坐姿状态：翘二郎腿 */
-                                        if (crosslegCounter > 60) {
-
-                                            /** 播放提示音 */
-                                            if (crosslegPlayerFlag) {
-                                                crosslegPlayer.start()
-                                            }
-                                            standardPlayerFlag = true
-                                            crosslegPlayerFlag = false
-                                            forwardheadPlayerFlag = true
-                                            ivStatus.setImageResource(R.drawable.crossleg_confirm)
-                                        } else if (crosslegCounter > 30) {
-                                            ivStatus.setImageResource(R.drawable.crossleg_suspect)
-                                        }
-
-                                        /** 显示 Debug 信息 */
-                                        tvDebug.text = getString(R.string.tfe_pe_tv_debug, "${sortedLabels[0].first} $crosslegCounter")
-                                    }
-                                    else -> {
-                                        forwardheadCounter = 0
-                                        crosslegCounter = 0
-                                        if (poseRegister == "standard") {
-                                            standardCounter++
-                                        }
-                                        poseRegister = "standard"
-
-                                        /** 显示当前坐姿状态：标准 */
-                                        if (standardCounter > 30) {
-
-                                            /** 播放提示音：坐姿标准 */
-                                            if (standardPlayerFlag) {
-                                                standardPlayer.start()
-                                            }
-                                            standardPlayerFlag = false
-                                            crosslegPlayerFlag = true
-                                            forwardheadPlayerFlag = true
-
-                                            ivStatus.setImageResource(R.drawable.standard)
-                                        }
-
-                                        /** 显示 Debug 信息 */
-                                        tvDebug.text = getString(R.string.tfe_pe_tv_debug, "${sortedLabels[0].first} $standardCounter")
-                                    }
-                                }
-
-
-                            }
-                            else {
-                                missingCounter++
-                                if (missingCounter > 30) {
-                                    ivStatus.setImageResource(R.drawable.no_target)
-                                }
-
-                                /** 显示 Debug 信息 */
-                                tvDebug.text = getString(R.string.tfe_pe_tv_debug, "missing $missingCounter")
-                            }
-                        }
-                    }).apply {
-                        prepareCamera()
-                    }
-                isPoseClassifier()
-                lifecycleScope.launch(Dispatchers.Main) {
-                    cameraSource?.initCamera()
-                }
-            }
-            createPoseEstimator()
-        }
-    }
+//    private fun openCamera() {
+//        /** 音频播放 */
+//        val crosslegPlayer = MediaPlayer.create(this, R.raw.crossleg)
+//        val forwardheadPlayer = MediaPlayer.create(this, R.raw.forwardhead)
+//        val standardPlayer = MediaPlayer.create(this, R.raw.standard)
+//        var crosslegPlayerFlag = true
+//        var forwardheadPlayerFlag = true
+//        var standardPlayerFlag = true
+//
+//        if (isCameraPermissionGranted()) {
+//            if (cameraSource == null) {
+//                cameraSource =
+//                    CameraSource(textureView, selectedCamera, object : CameraSource.CameraSourceListener {
+//                        override fun onFPSListener(fps: Int) {
+//
+//                            /** 解释一下，tfe_pe_tv 的意思：tensorflow example、pose estimation、text view */
+//                            runOnUiThread {
+//                                tvFPS.text = getString(R.string.tfe_pe_tv_fps, fps)
+//                            }
+//                        }
+//
+//                        /** 对检测结果进行处理 */
+//                        override fun onDetectedInfo(
+//                            personScore: Float?,
+//                            poseLabels: List<Pair<String, Float>>?
+//                        ) {
+//                            runOnUiThread {
+//                                tvScore.text = getString(R.string.tfe_pe_tv_score, personScore ?: 0f)
+//                            }
+//
+//                            /** 分析目标姿态，给出提示 */
+//                            if (poseLabels != null && personScore != null && personScore > 0.3) {
+//                                missingCounter = 0
+//                                val sortedLabels = poseLabels.sortedByDescending { it.second }
+//                                when (sortedLabels[0].first) {
+//                                    "forwardhead" -> {
+//                                        crosslegCounter = 0
+//                                        standardCounter = 0
+//                                        if (poseRegister == "forwardhead") {
+//                                            forwardheadCounter++
+//                                        }
+//                                        poseRegister = "forwardhead"
+//
+//                                        /** 显示当前坐姿状态：脖子前伸 */
+//                                        if (forwardheadCounter > 60) {
+//
+//                                            /** 播放提示音 */
+//                                            if (forwardheadPlayerFlag) {
+//                                                forwardheadPlayer.start()
+//                                            }
+//                                            standardPlayerFlag = true
+//                                            crosslegPlayerFlag = true
+//                                            forwardheadPlayerFlag = false
+//
+//                                            ivStatus.setImageResource(R.drawable.forwardhead_confirm)
+//                                        } else if (forwardheadCounter > 30) {
+//                                            ivStatus.setImageResource(R.drawable.forwardhead_suspect)
+//                                        }
+//
+//                                        /** 显示 Debug 信息 */
+//                                        runOnUiThread {
+//                                            tvDebug.text = getString(
+//                                                R.string.tfe_pe_tv_debug,
+//                                                "${sortedLabels[0].first} $forwardheadCounter"
+//                                            )
+//                                        }
+//                                    }
+//                                    "crossleg" -> {
+//                                        forwardheadCounter = 0
+//                                        standardCounter = 0
+//                                        if (poseRegister == "crossleg") {
+//                                            crosslegCounter++
+//                                        }
+//                                        poseRegister = "crossleg"
+//
+//                                        /** 显示当前坐姿状态：翘二郎腿 */
+//                                        if (crosslegCounter > 60) {
+//
+//                                            /** 播放提示音 */
+//                                            if (crosslegPlayerFlag) {
+//                                                crosslegPlayer.start()
+//                                            }
+//                                            standardPlayerFlag = true
+//                                            crosslegPlayerFlag = false
+//                                            forwardheadPlayerFlag = true
+//                                            ivStatus.setImageResource(R.drawable.crossleg_confirm)
+//                                        } else if (crosslegCounter > 30) {
+//                                            ivStatus.setImageResource(R.drawable.crossleg_suspect)
+//                                        }
+//
+//                                        /** 显示 Debug 信息 */
+//                                        runOnUiThread {
+//                                            tvDebug.text = getString(
+//                                                R.string.tfe_pe_tv_debug,
+//                                                "${sortedLabels[0].first} $crosslegCounter"
+//                                            )
+//                                        }
+//                                    }
+//                                    else -> {
+//                                        forwardheadCounter = 0
+//                                        crosslegCounter = 0
+//                                        if (poseRegister == "standard") {
+//                                            standardCounter++
+//                                        }
+//                                        poseRegister = "standard"
+//
+//                                        /** 显示当前坐姿状态：标准 */
+//                                        if (standardCounter > 30) {
+//
+//                                            /** 播放提示音：坐姿标准 */
+//                                            if (standardPlayerFlag) {
+//                                                standardPlayer.start()
+//                                            }
+//                                            standardPlayerFlag = false
+//                                            crosslegPlayerFlag = true
+//                                            forwardheadPlayerFlag = true
+//
+//                                            ivStatus.setImageResource(R.drawable.standard)
+//                                        }
+//
+//                                        /** 显示 Debug 信息 */
+//                                        runOnUiThread {
+//                                            tvDebug.text = getString(
+//                                                R.string.tfe_pe_tv_debug,
+//                                                "${sortedLabels[0].first} $standardCounter"
+//                                            )
+//                                        }
+//                                    }
+//                                }
+//
+//
+//                            }
+//                            else {
+//                                missingCounter++
+//                                if (missingCounter > 30) {
+//                                    ivStatus.setImageResource(R.drawable.no_target)
+//                                }
+//
+//                                /** 显示 Debug 信息 */
+//                                runOnUiThread {
+//                                    tvDebug.text = getString(R.string.tfe_pe_tv_debug, "missing $missingCounter")
+//                                }
+//
+//                            }
+//                        }
+//                    }).apply {
+//                        prepareCamera()
+//                    }
+//                isPoseClassifier()
+//                lifecycleScope.launch(Dispatchers.Main) {
+//                    cameraSource?.initCamera()
+//                }
+//            }
+//            createPoseEstimator()
+//        }
+//    }
 
     private fun isPoseClassifier() {
         cameraSource?.setClassifier(if (isClassifyPose) PoseClassifier.create(this) else null)
@@ -341,8 +385,8 @@ class MainActivity : AppCompatActivity() {
     /** 在程序运行过程中切换摄像头 */
     private fun changeCamera(direaction: Int) {
         val targetCamera = when (direaction) {
-            0 -> Camera.BACK
-            else -> Camera.FRONT
+            0 -> CameraData.BACK
+            else -> CameraData.FRONT
         }
         if (selectedCamera == targetCamera) return
         selectedCamera = targetCamera

@@ -21,6 +21,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
 import android.graphics.Matrix
+import android.graphics.Point
 import android.graphics.Rect
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -30,12 +31,15 @@ import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
+import android.util.Size
 import android.view.Surface
-import android.view.SurfaceView
+import android.view.TextureView
+import android.view.WindowManager
+import androidx.core.content.ContextCompat.getSystemService
 import kotlinx.coroutines.suspendCancellableCoroutine
 import lyi.linyi.posemon.VisualizationUtils
 import lyi.linyi.posemon.YuvToRgbConverter
-import lyi.linyi.posemon.data.Camera
+import lyi.linyi.posemon.data.CameraData
 import lyi.linyi.posemon.data.Person
 import lyi.linyi.posemon.ml.PoseClassifier
 import lyi.linyi.posemon.ml.PoseDetector
@@ -44,14 +48,14 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class CameraSource(
-    private val surfaceView: SurfaceView,
-    private val selectedCamera: Camera,
+    private val textureView: TextureView,
+    private val selectedCamera: CameraData,
     private val listener: CameraSourceListener? = null
 ) {
 
     companion object {
-        private const val PREVIEW_WIDTH = 640
-        private const val PREVIEW_HEIGHT = 480
+        private var PREVIEW_WIDTH = 640
+        private var PREVIEW_HEIGHT = 480
 
         /** Threshold for confidence score. */
         /** 分数阈值，高于这个分数的人体结果才会被认为是有效的。 */
@@ -64,7 +68,7 @@ class CameraSource(
     private var detector: PoseDetector? = null
     private var classifier: PoseClassifier? = null
     private var isTrackerEnabled = false
-    private var yuvConverter: YuvToRgbConverter = YuvToRgbConverter(surfaceView.context)
+    private var yuvConverter: YuvToRgbConverter = YuvToRgbConverter(textureView.context)
     private lateinit var imageBitmap: Bitmap
 
     /** Frame count that have been processed so far in an one second interval to calculate FPS. */
@@ -74,7 +78,7 @@ class CameraSource(
 
     /** Detects, characterizes, and connects to a CameraDevice (used for all camera operations) */
     private val cameraManager: CameraManager by lazy {
-        val context = surfaceView.context
+        val context = textureView.context
         context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     }
 
@@ -95,6 +99,13 @@ class CameraSource(
     private var cameraId: String = ""
 
     suspend fun initCamera() {
+        for (cameraId in cameraManager.cameraIdList) {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            if (characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
+                // 使用此cameraId打开后置摄像头
+                break
+            }
+        }
         camera = openCamera(cameraManager, cameraId)
         imageReader =
             ImageReader.newInstance(PREVIEW_WIDTH, PREVIEW_HEIGHT, ImageFormat.YUV_420_888, 3)
@@ -113,7 +124,7 @@ class CameraSource(
                 // Create rotated version for portrait display
                 val rotateMatrix = Matrix()
                 when (selectedCamera) {
-                    Camera.FRONT -> {
+                    CameraData.FRONT -> {
                         rotateMatrix.postRotate(270.0f)  // use front facing camera
                     }
                     else -> {
@@ -150,6 +161,7 @@ class CameraSource(
                     cont.resume(captureSession)
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Log.e(TAG, "onConfigureFailed: ${session.device.id}")
                     cont.resumeWithException(Exception("Session error"))
                 }
             }, null)
@@ -171,29 +183,40 @@ class CameraSource(
             }, imageReaderHandler)
         }
 
+    private fun getBestPreviewSize(cameraCharacteristics: CameraCharacteristics): Size {
+        val map = cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val previewSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
+        val displaySize = Point()
+        (textureView.context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.getSize(displaySize)
+        val displayWidth = displaySize.x
+        val displayHeight = displaySize.y
+
+        return previewSizes?.filter { size ->
+            size.width <= displayWidth && size.height <= displayHeight
+        }?.maxByOrNull { size ->
+            size.width * size.height
+        } ?: throw RuntimeException("No suitable preview size found.")
+    }
+
     fun prepareCamera() {
         for (cameraId in cameraManager.cameraIdList) {
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-
             val cameraDirection = characteristics.get(CameraCharacteristics.LENS_FACING)
-            when (selectedCamera) {
-                Camera.FRONT -> {
-                    if (cameraDirection != null &&
-                        cameraDirection == CameraCharacteristics.LENS_FACING_BACK  // don't use a back facing camera
-                    ) {
-                        continue
-                    }
-                }
-                else -> {
-                    if (cameraDirection != null &&
-                        cameraDirection == CameraCharacteristics.LENS_FACING_FRONT  // don't use a front facing camera
-                    ) {
-                        continue
-                    }
-                }
+
+            if (selectedCamera == CameraData.FRONT && cameraDirection == CameraCharacteristics.LENS_FACING_FRONT) {
+                this.cameraId = cameraId
+                break
+            } else if (selectedCamera != CameraData.FRONT && cameraDirection == CameraCharacteristics.LENS_FACING_BACK) {
+                this.cameraId = cameraId
+                break
             }
-            this.cameraId = cameraId
         }
+
+        val characteristics = cameraManager.getCameraCharacteristics(this.cameraId)
+        val bestPreviewSize = getBestPreviewSize(characteristics)
+//        PREVIEW_WIDTH = bestPreviewSize.width
+//        PREVIEW_HEIGHT = bestPreviewSize.height
+//        Log.e(TAG, "PreviewSize width: ${PREVIEW_WIDTH} height: ${PREVIEW_HEIGHT}")
     }
 
     fun setDetector(detector: PoseDetector) {
@@ -280,15 +303,16 @@ class CameraSource(
         visualize(persons, bitmap)
     }
 
-    private fun visualize(persons: List<Person>, bitmap: Bitmap) {
 
+    private fun visualize(persons: List<Person>, bitmap: Bitmap) {
         val outputBitmap = VisualizationUtils.drawBodyKeypoints(
             bitmap,
             persons.filter { it.score > MIN_CONFIDENCE }, isTrackerEnabled
         )
 
-        val holder = surfaceView.holder
-        val surfaceCanvas = holder.lockCanvas()
+        val surfaceTexture = textureView.surfaceTexture
+        val surface = Surface(surfaceTexture)
+        val surfaceCanvas = surface.lockCanvas(null)
         surfaceCanvas?.let { canvas ->
             val screenWidth: Int
             val screenHeight: Int
@@ -315,8 +339,9 @@ class CameraSource(
                 outputBitmap, Rect(0, 0, outputBitmap.width, outputBitmap.height),
                 Rect(left, top, right, bottom), null
             )
-            surfaceView.holder.unlockCanvasAndPost(canvas)
+            surface.unlockCanvasAndPost(canvas)
         }
+        surface.release()
     }
 
     private fun stopImageReaderThread() {

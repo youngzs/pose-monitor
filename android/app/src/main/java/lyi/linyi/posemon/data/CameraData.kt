@@ -1,6 +1,6 @@
 package lyi.linyi.posemon.data
 
-enum class Camera {
+enum class CameraData {
     FRONT,
     BACK
 }

@@ -23,8 +23,8 @@ import android.graphics.PointF
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
-import org.tensorflow.posemon.data.BodyPart
-import org.tensorflow.posemon.data.Person
+import lyi.linyi.posemon.data.BodyPart
+import lyi.linyi.posemon.data.Person
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import kotlin.math.pow

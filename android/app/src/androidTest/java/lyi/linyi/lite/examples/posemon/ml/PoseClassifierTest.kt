@@ -23,11 +23,11 @@ import junit.framework.TestCase.assertEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.tensorflow.posemon.data.Device
-import org.tensorflow.posemon.ml.ModelType
-import org.tensorflow.posemon.ml.MoveNet
-import org.tensorflow.posemon.ml.PoseClassifier
-import org.tensorflow.posemon.ml.PoseDetector
+import lyi.linyi.posemon.data.Device
+import lyi.linyi.posemon.ml.ModelType
+import lyi.linyi.posemon.ml.MoveNet
+import lyi.linyi.posemon.ml.PoseClassifier
+import lyi.linyi.posemon.ml.PoseDetector
 
 @RunWith(AndroidJUnit4::class)
 class PoseClassifierTest {
@@ -43,7 +43,7 @@ class PoseClassifierTest {
     @Before
     fun setup() {
         appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        poseDetector = MoveNet.create(appContext, Device.CPU, ModelType.Lightning)
+        poseDetector = MoveNet.create(appContext, Device.CPU, ModelType.Thunder)
         poseClassifier = PoseClassifier.create(appContext)
     }
 

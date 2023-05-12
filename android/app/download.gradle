@@ -62,6 +62,46 @@ class DownloadUrlTask extends DefaultTask {
     void download() {
         ant.get(src: sourceUrl, dest: target)
     }
+
+    @Override
+    void setActions(List<Action<? super Task>> list) {
+
+    }
+
+    @Override
+    void onlyIf(Spec<? super Task> spec) {
+
+    }
+
+    @Override
+    void setOnlyIf(Spec<? super Task> spec) {
+
+    }
+
+    @Override
+    Task doFirst(Action<? super Task> action) {
+        return null
+    }
+
+    @Override
+    Task doFirst(String s, Action<? super Task> action) {
+        return null
+    }
+
+    @Override
+    Task doLast(Action<? super Task> action) {
+        return null
+    }
+
+    @Override
+    Task doLast(String s, Action<? super Task> action) {
+        return null
+    }
+
+    @Override
+    int compareTo(Task task) {
+        return 0
+    }
 }
 
 preBuild.dependsOn downloadModel
