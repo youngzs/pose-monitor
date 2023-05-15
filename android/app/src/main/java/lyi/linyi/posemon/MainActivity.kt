@@ -20,6 +20,7 @@ limitations under the License.
 
 package lyi.linyi.posemon
 
+import PoseType
 import android.Manifest
 import android.app.AlertDialog
 import android.app.Dialog
@@ -28,12 +29,14 @@ import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Process
-import android.view.SurfaceHolder
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraManager
+import android.view.TextureView
 import android.view.View
 import android.view.WindowManager
-import android.widget.*
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
+import android.widget.ImageView
+import android.widget.Spinner
+import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -47,18 +50,15 @@ import lyi.linyi.posemon.data.Device
 import lyi.linyi.posemon.ml.ModelType
 import lyi.linyi.posemon.ml.MoveNet
 import lyi.linyi.posemon.ml.PoseClassifier
-import android.hardware.Camera
-import android.view.TextureView
+import mediaPlayerFlags
+import poseConfigs
+import poseCounterMap
 
 class MainActivity : AppCompatActivity() {
     companion object {
         private const val FRAGMENT_DIALOG = "dialog"
     }
 
-    /** 为视频画面创建一个 SurfaceView */
-//    private lateinit var surfaceView: SurfaceView
-//    private lateinit var surfaceHolder: SurfaceHolder
-//    private var camera: Camera? = null
     /** 为视频画面创建一个 TextureView */
     private lateinit var textureView: TextureView
 
@@ -68,13 +68,10 @@ class MainActivity : AppCompatActivity() {
     private var selectedCamera = CameraData.BACK
 
     /** 定义几个计数器 */
-    private var forwardheadCounter = 0
-    private var crosslegCounter = 0
-    private var standardCounter = 0
     private var missingCounter = 0
 
     /** 定义一个历史姿态寄存器 */
-    private var poseRegister = "standard"
+    private var poseRegister: PoseType = PoseType.STANDARD
 
     /** 设置一个用来显示 Debug 信息的 TextView */
     private lateinit var tvDebug: TextView
@@ -90,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     private var cameraSource: CameraSource? = null
     private var isClassifyPose = true
 
+    /** 相机权限获取，需要拍照进行处理 */
     private val requestPermissionLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
@@ -104,6 +102,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    /** 设备选择，也就是使用什么样的硬件：CPU，GPU还是NNAPI */
     private var changeDeviceListener = object : AdapterView.OnItemSelectedListener {
         override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
             changeDevice(position)
@@ -114,6 +113,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 前置相机还是后置相机进行拍摄 */
     private var changeCameraListener = object : AdapterView.OnItemSelectedListener {
         override fun onItemSelected(p0: AdapterView<*>?, view: View?, direction: Int, id: Long) {
             changeCamera(direction)
@@ -124,6 +124,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 程序启动时候的一些初始化设定 */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -151,6 +152,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** surfaceTextureListener 对象附加到一个 TextureView 实例上，以便在纹理视图发生相应事件时接收通知。 */
     private val surfaceTextureListener = object : TextureView.SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
             openCamera()
@@ -186,162 +188,123 @@ class MainActivity : AppCompatActivity() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-//    private fun openCamera() {
-//        /** 音频播放 */
-//        val crosslegPlayer = MediaPlayer.create(this, R.raw.crossleg)
-//        val forwardheadPlayer = MediaPlayer.create(this, R.raw.forwardhead)
-//        val standardPlayer = MediaPlayer.create(this, R.raw.standard)
-//        var crosslegPlayerFlag = true
-//        var forwardheadPlayerFlag = true
-//        var standardPlayerFlag = true
-//
-//        if (isCameraPermissionGranted()) {
-//            if (cameraSource == null) {
-//                cameraSource =
-//                    CameraSource(textureView, selectedCamera, object : CameraSource.CameraSourceListener {
-//                        override fun onFPSListener(fps: Int) {
-//
-//                            /** 解释一下，tfe_pe_tv 的意思：tensorflow example、pose estimation、text view */
-//                            runOnUiThread {
-//                                tvFPS.text = getString(R.string.tfe_pe_tv_fps, fps)
-//                            }
-//                        }
-//
-//                        /** 对检测结果进行处理 */
-//                        override fun onDetectedInfo(
-//                            personScore: Float?,
-//                            poseLabels: List<Pair<String, Float>>?
-//                        ) {
-//                            runOnUiThread {
-//                                tvScore.text = getString(R.string.tfe_pe_tv_score, personScore ?: 0f)
-//                            }
-//
-//                            /** 分析目标姿态，给出提示 */
-//                            if (poseLabels != null && personScore != null && personScore > 0.3) {
-//                                missingCounter = 0
-//                                val sortedLabels = poseLabels.sortedByDescending { it.second }
-//                                when (sortedLabels[0].first) {
-//                                    "forwardhead" -> {
-//                                        crosslegCounter = 0
-//                                        standardCounter = 0
-//                                        if (poseRegister == "forwardhead") {
-//                                            forwardheadCounter++
-//                                        }
-//                                        poseRegister = "forwardhead"
-//
-//                                        /** 显示当前坐姿状态：脖子前伸 */
-//                                        if (forwardheadCounter > 60) {
-//
-//                                            /** 播放提示音 */
-//                                            if (forwardheadPlayerFlag) {
-//                                                forwardheadPlayer.start()
-//                                            }
-//                                            standardPlayerFlag = true
-//                                            crosslegPlayerFlag = true
-//                                            forwardheadPlayerFlag = false
-//
-//                                            ivStatus.setImageResource(R.drawable.forwardhead_confirm)
-//                                        } else if (forwardheadCounter > 30) {
-//                                            ivStatus.setImageResource(R.drawable.forwardhead_suspect)
-//                                        }
-//
-//                                        /** 显示 Debug 信息 */
-//                                        runOnUiThread {
-//                                            tvDebug.text = getString(
-//                                                R.string.tfe_pe_tv_debug,
-//                                                "${sortedLabels[0].first} $forwardheadCounter"
-//                                            )
-//                                        }
-//                                    }
-//                                    "crossleg" -> {
-//                                        forwardheadCounter = 0
-//                                        standardCounter = 0
-//                                        if (poseRegister == "crossleg") {
-//                                            crosslegCounter++
-//                                        }
-//                                        poseRegister = "crossleg"
-//
-//                                        /** 显示当前坐姿状态：翘二郎腿 */
-//                                        if (crosslegCounter > 60) {
-//
-//                                            /** 播放提示音 */
-//                                            if (crosslegPlayerFlag) {
-//                                                crosslegPlayer.start()
-//                                            }
-//                                            standardPlayerFlag = true
-//                                            crosslegPlayerFlag = false
-//                                            forwardheadPlayerFlag = true
-//                                            ivStatus.setImageResource(R.drawable.crossleg_confirm)
-//                                        } else if (crosslegCounter > 30) {
-//                                            ivStatus.setImageResource(R.drawable.crossleg_suspect)
-//                                        }
-//
-//                                        /** 显示 Debug 信息 */
-//                                        runOnUiThread {
-//                                            tvDebug.text = getString(
-//                                                R.string.tfe_pe_tv_debug,
-//                                                "${sortedLabels[0].first} $crosslegCounter"
-//                                            )
-//                                        }
-//                                    }
-//                                    else -> {
-//                                        forwardheadCounter = 0
-//                                        crosslegCounter = 0
-//                                        if (poseRegister == "standard") {
-//                                            standardCounter++
-//                                        }
-//                                        poseRegister = "standard"
-//
-//                                        /** 显示当前坐姿状态：标准 */
-//                                        if (standardCounter > 30) {
-//
-//                                            /** 播放提示音：坐姿标准 */
-//                                            if (standardPlayerFlag) {
-//                                                standardPlayer.start()
-//                                            }
-//                                            standardPlayerFlag = false
-//                                            crosslegPlayerFlag = true
-//                                            forwardheadPlayerFlag = true
-//
-//                                            ivStatus.setImageResource(R.drawable.standard)
-//                                        }
-//
-//                                        /** 显示 Debug 信息 */
-//                                        runOnUiThread {
-//                                            tvDebug.text = getString(
-//                                                R.string.tfe_pe_tv_debug,
-//                                                "${sortedLabels[0].first} $standardCounter"
-//                                            )
-//                                        }
-//                                    }
-//                                }
-//
-//
-//                            }
-//                            else {
-//                                missingCounter++
-//                                if (missingCounter > 30) {
-//                                    ivStatus.setImageResource(R.drawable.no_target)
-//                                }
-//
-//                                /** 显示 Debug 信息 */
-//                                runOnUiThread {
-//                                    tvDebug.text = getString(R.string.tfe_pe_tv_debug, "missing $missingCounter")
-//                                }
-//
-//                            }
-//                        }
-//                    }).apply {
-//                        prepareCamera()
-//                    }
-//                isPoseClassifier()
-//                lifecycleScope.launch(Dispatchers.Main) {
-//                    cameraSource?.initCamera()
-//                }
-//            }
-//            createPoseEstimator()
-//        }
-//    }
+    /** 主要目的是初始化并打开相机。它首先检查相机权限是否已被授予，然后初始化 cameraSource 对象（如果尚未初始化）。
+     * 它还创建一个用于处理检测到的姿势信息的监听器，并为每个姿势类型创建一个 MediaPlayer 实例。最后，它调用
+     * createPoseEstimator() 函数以创建姿势估计器。*/
+    private fun openCamera() {
+        // 检查是否已获得相机权限
+        if (isCameraPermissionGranted()) {
+            // 如果 cameraSource 为空，则进行相机初始化操作
+            if (cameraSource == null) {
+                // 初始化 MediaPlayer 和标志，对于每个姿势类型和配置，如果有音频资源，则创建 MediaPlayer 实例
+                val mediaPlayers = poseConfigs.mapNotNull { (poseType, config) ->
+                    if (config.audioResId != 0) {
+                        poseType to MediaPlayer.create(this, config.audioResId)
+                    } else {
+                        null
+                    }
+                }.toMap()
+
+                // 创建 CameraSource 对象，并设置纹理视图、相机选择和监听器
+                cameraSource =
+                    CameraSource(textureView, selectedCamera, object : CameraSource.CameraSourceListener {
+                        // 每秒帧数（FPS）监听器，显示 FPS 信息
+                        override fun onFPSListener(fps: Int) {
+                            runOnUiThread {
+                                tvFPS.text = getString(R.string.tfe_pe_tv_fps, fps)
+                            }
+                        }
+
+                        // 处理检测到的姿势信息
+                        override fun onDetectedInfo(
+                            personScore: Float?,
+                            poseLabels: List<Pair<String, Float>>?
+                        ) {
+                            processPose(poseLabels, personScore, mediaPlayers)
+                        }
+                    }).apply {
+                        prepareCamera()
+                    }
+                // 检查姿势分类器是否可用
+                isPoseClassifier()
+                // 使用协程在主线程上初始化相机
+                lifecycleScope.launch(Dispatchers.Main) {
+                    cameraSource?.initCamera()
+                }
+            }
+            // 创建姿势估计器
+            createPoseEstimator()
+        }
+    }
+
+    /** 主要目的是处理从姿势检测器得到的姿势信息，并根据结果更新界面显示。它首先检查姿势标签和人物得分是否有效，然后根据
+     * 检测到的姿势类型更新姿势计数器。接下来，它根据计数器的值更新界面上的姿势状态图像，并在一定条件下播放提示音。最后，它更新界面上的调试信息*/
+    private fun processPose(poseLabels: List<Pair<String, Float>>?, personScore: Float?, mediaPlayers: Map<PoseType, MediaPlayer>) {
+        // 更新界面上的得分显示
+        runOnUiThread {
+            tvScore.text = getString(R.string.tfe_pe_tv_score, personScore ?: 0f)
+        }
+
+        // 如果姿势标签和人物得分不为空，并且得分大于 0.3，开始处理姿势
+        if (poseLabels != null && personScore != null && personScore > 0.3) {
+            missingCounter = 0
+            val sortedLabels = poseLabels.sortedByDescending { it.second }
+            val poseType = PoseType.valueOf(sortedLabels[0].first.uppercase())
+            val poseConfig = poseConfigs[poseType]
+
+            // 更新姿势计数器
+            if (poseRegister == poseType) {
+                poseCounterMap[poseType] = poseCounterMap[poseType]?.plus(1) ?: 1
+            } else {
+                poseCounterMap[poseType] = 1
+                resetCountersAndFlags(poseType)
+            }
+            poseRegister = poseType
+
+            // 根据姿势计数器更新界面上的坐姿状态图像
+            if (poseCounterMap[poseType]!! > 60) {
+                // 播放提示音
+                if (mediaPlayerFlags[poseType] == true) {
+                    mediaPlayers[poseType]?.start()
+                }
+                mediaPlayerFlags[poseType] = false
+                ivStatus.setImageResource(poseConfig?.confirmImageResource ?: R.drawable.no_target)
+            } else if (poseCounterMap[poseType]!! > 30) {
+                ivStatus.setImageResource(poseConfig?.imageResId ?: R.drawable.no_target)
+            }
+
+            // 更新界面上的调试信息
+            runOnUiThread {
+                tvDebug.text = getString(
+                    R.string.tfe_pe_tv_debug,
+                    "${sortedLabels[0].first} ${poseCounterMap[poseType]} ${poseConfig?.promptText}"
+                )
+            }
+        } else {
+            // 增加丢失计数器
+            missingCounter++
+            // 如果丢失计数器大于 30，更新界面上的图像为无目标
+            if (missingCounter > 30) {
+                ivStatus.setImageResource(R.drawable.no_target)
+            }
+
+            // 更新界面上的调试信息
+            runOnUiThread {
+                tvDebug.text = getString(R.string.tfe_pe_tv_debug, "missing $missingCounter")
+            }
+        }
+    }
+
+
+    /** 重置计数器和标志 */
+    private fun resetCountersAndFlags(excludeType: PoseType) {
+        poseConfigs.keys.filter { it != excludeType }.forEach { resetType ->
+            poseCounterMap[resetType] = 0
+            mediaPlayerFlags[resetType] = true
+        }
+    }
+
+
 
     private fun isPoseClassifier() {
         cameraSource?.setClassifier(if (isClassifyPose) PoseClassifier.create(this) else null)
